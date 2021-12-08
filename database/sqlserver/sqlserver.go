@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/microsoft/go-mssqldb/batch"
 	"io"
 	nurl "net/url"
 	"strconv"
@@ -246,15 +247,18 @@ func (ss *SQLServer) Run(migration io.Reader) error {
 
 	// run migration
 	query := string(migr[:])
-	if _, err := ss.conn.ExecContext(context.Background(), query); err != nil {
-		if msErr, ok := err.(mssql.Error); ok {
-			message := fmt.Sprintf("migration failed: %s", msErr.Message)
-			if msErr.ProcName != "" {
-				message = fmt.Sprintf("%s (proc name %s)", msErr.Message, msErr.ProcName)
+	scripts := batch.Split(query, "go")
+	for _, script := range scripts {
+		if _, err := ss.conn.ExecContext(context.Background(), script); err != nil {
+			if msErr, ok := err.(mssql.Error); ok {
+				message := fmt.Sprintf("migration failed: %s", msErr.Message)
+				if msErr.ProcName != "" {
+					message = fmt.Sprintf("%s (proc name %s)", msErr.Message, msErr.ProcName)
+				}
+				return database.Error{OrigErr: err, Err: message, Query: migr, Line: uint(msErr.LineNo)}
 			}
-			return database.Error{OrigErr: err, Err: message, Query: migr, Line: uint(msErr.LineNo)}
+			return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
 		}
-		return database.Error{OrigErr: err, Err: "migration failed", Query: migr}
 	}
 
 	return nil

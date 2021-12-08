@@ -88,6 +88,7 @@ func Test(t *testing.T) {
 	t.Run("testMigrate", testMigrate)
 	t.Run("testMultiStatement", testMultiStatement)
 	t.Run("testErrorParsing", testErrorParsing)
+	t.Run("testBatchedStatement", testBatchedStatement)
 	t.Run("testLockWorks", testLockWorks)
 	t.Run("testMsiTrue", testMsiTrue)
 	t.Run("testOpenWithPasswordAndMSI", testOpenWithPasswordAndMSI)
@@ -219,6 +220,49 @@ func testErrorParsing(t *testing.T) {
 			t.Fatal("expected err but got nil")
 		} else if err.Error() != wantErr {
 			t.Fatalf("expected '%s' but got '%s'", wantErr, err.Error())
+		}
+	})
+}
+
+func testBatchedStatement(t *testing.T) {
+	dktesting.ParallelTest(t, specs, func(t *testing.T, c dktest.ContainerInfo) {
+		ip, port, err := c.FirstPort()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		addr := msConnectionString(ip, port)
+		ms := &SQLServer{}
+		d, err := ms.Open(addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := d.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := d.Run(strings.NewReader(`CREATE PROCEDURE uspA
+AS
+BEGIN
+    SELECT 1;
+END;
+GO
+CREATE PROCEDURE uspB
+AS
+BEGIN
+    SELECT 2;
+END`)); err != nil {
+			t.Fatalf("expected err to be nil, got %v", err)
+		}
+
+		// make sure second proc exists
+		var exists int
+		if err := d.(*SQLServer).conn.QueryRowContext(context.Background(), "Select COUNT(1) from sysobjects where type = 'P' and category = 0 and [NAME] = 'uspB'").Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists != 1 {
+			t.Fatalf("expected proc uspB to exist")
 		}
 	})
 }
