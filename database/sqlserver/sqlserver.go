@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/microsoft/go-mssqldb/batch"
 	"io"
 	nurl "net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/microsoft/go-mssqldb/batch"
 
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/golang-migrate/migrate/v4"
@@ -42,9 +43,10 @@ var lockErrorMap = map[int]string{
 
 // Config for database
 type Config struct {
-	MigrationsTable string
-	DatabaseName    string
-	SchemaName      string
+	MigrationsTable       string
+	DatabaseName          string
+	SchemaName            string
+	BatchStatementEnabled bool
 }
 
 // SQL Server connection
@@ -168,9 +170,18 @@ func (ss *SQLServer) Open(url string) (database.Driver, error) {
 
 	migrationsTable := purl.Query().Get("x-migrations-table")
 
+	batchStatementEnabled := false
+	if s := purl.Query().Get("x-batch"); len(s) > 0 {
+		batchStatementEnabled, err = strconv.ParseBool(s)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse option x-batch: %w", err)
+		}
+	}
+
 	px, err := WithInstance(db, &Config{
-		DatabaseName:    purl.Path,
-		MigrationsTable: migrationsTable,
+		DatabaseName:          purl.Path,
+		MigrationsTable:       migrationsTable,
+		BatchStatementEnabled: batchStatementEnabled,
 	})
 
 	if err != nil {
@@ -247,7 +258,12 @@ func (ss *SQLServer) Run(migration io.Reader) error {
 
 	// run migration
 	query := string(migr[:])
-	scripts := batch.Split(query, "go")
+	scripts := []string{query}
+
+	if ss.config.BatchStatementEnabled {
+		scripts = batch.Split(query, "go")
+	}
+
 	for _, script := range scripts {
 		if _, err := ss.conn.ExecContext(context.Background(), script); err != nil {
 			if msErr, ok := err.(mssql.Error); ok {
